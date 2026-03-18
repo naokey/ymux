@@ -1,0 +1,17 @@
+export const IPC = {
+  PTY_CREATE: 'pty:create',
+  PTY_WRITE: 'pty:write',
+  PTY_RESIZE: 'pty:resize',
+  PTY_KILL: 'pty:kill',
+  PTY_DATA: 'pty:data',
+  PTY_EXIT: 'pty:exit',
+  PTY_GET_CWD: 'pty:get-cwd',
+  PTY_GET_PROCESS: 'pty:get-process',
+  SPLIT_PANE: 'pane:split',
+  NEW_TAB: 'pane:new-tab',
+  WAITING_COUNT: 'tray:waiting-count',
+  SESSION_WAITING: 'session:waiting',
+  SEND_KEYS: 'pane:send-keys',
+  CAPTURE_PANE: 'pane:capture-pane',
+  LIST_PANES: 'pane:list-panes',
+} as const;

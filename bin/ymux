@@ -1,0 +1,217 @@
+#!/usr/bin/env node
+
+const net = require('node:net');
+const path = require('node:path');
+
+
+const SOCKET_PATH = process.env.YMUX_SOCKET || '/tmp/ymux.sock';
+
+const args = process.argv.slice(2);
+const subcommand = args[0];
+
+function usage() {
+  console.log(`ymux - Terminal multiplexer CLI
+
+Usage:
+  ymux split-window [-h|-v] [command...]   Split the active pane
+  ymux new-tab [command...]                Open a new tab
+  ymux send-keys -t <pane> "text"          Send text to a pane
+  ymux capture-pane -t <pane> [-l lines]   Capture pane output
+  ymux list-panes                          List panes in active tab
+  ymux help                                Show this help
+
+Options:
+  -h    Split horizontally (left/right, default) — same as tmux
+  -v    Split vertically (top/bottom)
+  -t    Target pane index (0-based)
+  -l    Number of lines to capture (default: 50)
+
+Examples:
+  ymux split-window -h "claude 'Hello'"
+  ymux split-window -v
+  ymux new-tab "cd ~/projects && claude"
+  ymux send-keys -t 1 "What is the status?"
+  ymux capture-pane -t 0 -l 100
+  ymux list-panes
+`);
+}
+
+function sendCommand(cmd) {
+  return new Promise((resolve, reject) => {
+    const client = net.createConnection(SOCKET_PATH, () => {
+      client.write(JSON.stringify(cmd));
+    });
+
+    let data = '';
+    client.on('data', (chunk) => {
+      data += chunk.toString();
+    });
+
+    client.on('end', () => {
+      try {
+        const response = JSON.parse(data);
+        resolve(response);
+      } catch {
+        reject(new Error('Invalid response from ymux'));
+      }
+    });
+
+    client.on('error', (err) => {
+      if (err.code === 'ENOENT' || err.code === 'ECONNREFUSED') {
+        reject(new Error('ymux is not running. Start ymux first.'));
+      } else {
+        reject(err);
+      }
+    });
+
+    // Timeout after 10 seconds
+    setTimeout(() => {
+      client.destroy();
+      reject(new Error('Timeout waiting for ymux response'));
+    }, 10000);
+  });
+}
+
+function parseTarget(args, startIdx) {
+  let target = 0;
+  let lines = 50;
+  const textParts = [];
+  for (let i = startIdx; i < args.length; i++) {
+    if (args[i] === '-t' && args[i + 1] !== undefined) {
+      target = parseInt(args[++i], 10);
+    } else if (args[i] === '-l' && args[i + 1] !== undefined) {
+      lines = parseInt(args[++i], 10);
+    } else {
+      textParts.push(args[i]);
+    }
+  }
+  return { target, lines, text: textParts.join(' ') };
+}
+
+async function main() {
+  if (!subcommand || subcommand === 'help' || subcommand === '--help') {
+    usage();
+    process.exit(0);
+  }
+
+  if (subcommand === 'split-window' || subcommand === 'split') {
+    let direction = 'vertical';
+    let commandParts = [];
+
+    for (let i = 1; i < args.length; i++) {
+      if (args[i] === '-h') {
+        direction = 'vertical';   // -h = horizontal split line = left/right panes (tmux convention)
+      } else if (args[i] === '-v') {
+        direction = 'horizontal'; // -v = vertical split line = top/bottom panes (tmux convention)
+      } else {
+        commandParts.push(args[i]);
+      }
+    }
+
+    const cmd = {
+      action: 'split',
+      direction,
+      command: commandParts.length > 0 ? commandParts.join(' ') : undefined,
+      cwd: process.cwd(),
+    };
+
+    try {
+      const response = await sendCommand(cmd);
+      if (!response.ok) {
+        console.error('Error:', response.error);
+        process.exit(1);
+      }
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (subcommand === 'new-tab' || subcommand === 'new-window') {
+    const commandParts = args.slice(1);
+
+    const cmd = {
+      action: 'new-tab',
+      command: commandParts.length > 0 ? commandParts.join(' ') : undefined,
+      cwd: process.cwd(),
+    };
+
+    try {
+      const response = await sendCommand(cmd);
+      if (!response.ok) {
+        console.error('Error:', response.error);
+        process.exit(1);
+      }
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (subcommand === 'send-keys' || subcommand === 'send') {
+    const { target, text } = parseTarget(args, 1);
+    if (!text) {
+      console.error('Usage: ymux send-keys -t <pane> "text to send"');
+      process.exit(1);
+    }
+
+    try {
+      const response = await sendCommand({ action: 'send-keys', target, text: text + '\n' });
+      if (!response.ok) {
+        console.error('Error:', response.error);
+        process.exit(1);
+      }
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (subcommand === 'capture-pane' || subcommand === 'capture') {
+    const { target, lines } = parseTarget(args, 1);
+
+    try {
+      const response = await sendCommand({ action: 'capture-pane', target, lines });
+      if (!response.ok) {
+        console.error('Error:', response.error);
+        process.exit(1);
+      }
+      if (response.data) {
+        process.stdout.write(response.data + '\n');
+      }
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (subcommand === 'list-panes' || subcommand === 'lsp') {
+    try {
+      const response = await sendCommand({ action: 'list-panes' });
+      if (!response.ok) {
+        console.error('Error:', response.error);
+        process.exit(1);
+      }
+      if (response.panes) {
+        for (const pane of response.panes) {
+          const marker = pane.active ? '*' : ' ';
+          console.log(`${marker} [${pane.index}] ${pane.kind}  ${pane.sessionId}`);
+        }
+      }
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  console.error(`Unknown command: ${subcommand}`);
+  usage();
+  process.exit(1);
+}
+
+main();
