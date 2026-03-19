@@ -90,6 +90,12 @@ npx electron-forge package    # Build .app
 npx electron-forge make        # Build .dmg
 ```
 
+## Disclaimer
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. THE AUTHORS AND COPYRIGHT HOLDERS SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE USE OF THIS SOFTWARE. USE AT YOUR OWN RISK.
+
+本ソフトウェアは「現状のまま」提供されます。本ソフトウェアの使用により生じたいかなる損害・問題についても、作者は一切の責任を負いません。自己責任でご利用ください。
+
 ## License
 
 MIT
