@@ -26,8 +26,16 @@ export interface SocketResponse {
 type CommandHandler = (cmd: SocketCommand) => Promise<SocketResponse>;
 
 let server: net.Server | null = null;
+let currentHandler: CommandHandler | null = null;
 
 export function startSocketServer(onCommand: CommandHandler): void {
+  currentHandler = onCommand;
+  createServer();
+}
+
+function createServer(): void {
+  if (!currentHandler) return;
+
   // Clean up stale socket
   try {
     fs.unlinkSync(SOCKET_PATH);
@@ -38,13 +46,14 @@ export function startSocketServer(onCommand: CommandHandler): void {
   server = net.createServer((conn) => {
     let data = '';
     let handled = false;
+
     conn.on('data', (chunk) => {
       data += chunk.toString();
       if (handled) return;
       try {
         const cmd: SocketCommand = JSON.parse(data);
         handled = true;
-        onCommand(cmd).then((response) => {
+        currentHandler!(cmd).then((response) => {
           conn.write(JSON.stringify(response) + '\n', () => conn.end());
         }).catch((err) => {
           conn.write(JSON.stringify({ ok: false, error: String(err) }) + '\n', () => conn.end());
@@ -52,6 +61,10 @@ export function startSocketServer(onCommand: CommandHandler): void {
       } catch {
         // Not complete JSON yet, wait for more data
       }
+    });
+
+    conn.on('error', (err) => {
+      console.error('[ymux] Socket connection error:', err.message);
     });
   });
 
@@ -64,12 +77,54 @@ export function startSocketServer(onCommand: CommandHandler): void {
     }
   });
 
-  server.on('error', (err) => {
-    console.error('ymux socket server error:', err);
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    console.error('[ymux] Socket server error:', err);
+    // Attempt to recover by restarting the server
+    if (server) {
+      try { server.close(); } catch {}
+      server = null;
+    }
+    console.log('[ymux] Restarting socket server in 1s...');
+    setTimeout(() => createServer(), 1000);
+  });
+
+  server.on('close', () => {
+    // If the server closed unexpectedly (not via stopSocketServer), restart it
+    if (currentHandler && server !== null) {
+      console.log('[ymux] Socket server closed unexpectedly, restarting in 1s...');
+      server = null;
+      setTimeout(() => createServer(), 1000);
+    }
   });
 }
 
+// Periodically verify the socket file still exists (macOS /tmp cleanup, etc.)
+const SOCKET_WATCHDOG_INTERVAL = 10_000; // 10 seconds
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+
+function startWatchdog(): void {
+  if (watchdogTimer) return;
+  watchdogTimer = setInterval(() => {
+    if (!currentHandler) return;
+    if (!server) return;
+    try {
+      fs.accessSync(SOCKET_PATH);
+    } catch {
+      // Socket file was deleted — restart the server
+      console.log('[ymux] Socket file missing, restarting server...');
+      try { server.close(); } catch {}
+      server = null;
+      createServer();
+    }
+  }, SOCKET_WATCHDOG_INTERVAL);
+}
+
 export function stopSocketServer(): void {
+  currentHandler = null; // Prevent auto-restart
+  if (watchdogTimer) {
+    clearInterval(watchdogTimer);
+    watchdogTimer = null;
+  }
   if (server) {
     server.close();
     server = null;
@@ -80,3 +135,6 @@ export function stopSocketServer(): void {
     // ignore
   }
 }
+
+// Start watchdog when module loads
+startWatchdog();

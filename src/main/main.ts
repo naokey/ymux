@@ -10,6 +10,14 @@ import { createTray, destroyTray } from './tray';
 import { startWebServer, stopWebServer, broadcastWaitingState } from './web-server';
 import { startTelegramBot, stopTelegramBot, notifyWaiting } from './telegram-bot';
 
+// --- Global crash prevention ---
+process.on('uncaughtException', (err) => {
+  console.error('[ymux] Uncaught exception (process kept alive):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[ymux] Unhandled rejection (process kept alive):', reason);
+});
+
 const ptyManager = new PtyManager();
 let mainWindow: BrowserWindow | null = null;
 
@@ -48,6 +56,30 @@ const createWindow = () => {
     mainWindow = null;
   });
 
+  // Recover from renderer crashes (GPU issues, OOM, etc.)
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[ymux] Renderer crashed:', details.reason, 'exitCode:', details.exitCode);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      console.log('[ymux] Reloading renderer...');
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.reload();
+        }
+      }, 1000);
+    }
+  });
+
+  mainWindow.webContents.on('unresponsive', () => {
+    console.error('[ymux] Renderer became unresponsive, reloading...');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.reload();
+        }
+      }, 2000);
+    }
+  });
+
   // Handle webview new-window requests (target="_blank", window.open)
   // Electron webview tags create guest webContents; we deny popup creation
   // and let the renderer handle it via the 'new-window' event on the webview tag.
@@ -72,6 +104,15 @@ registerIpcHandlers(ptyManager, () => mainWindow);
 
 // Handle external commands via Unix socket
 async function handleSocketCommand(cmd: SocketCommand): Promise<SocketResponse> {
+  try {
+    return await handleSocketCommandInner(cmd);
+  } catch (err) {
+    console.error('[ymux] Socket command error:', err);
+    return { ok: false, error: String(err) };
+  }
+}
+
+async function handleSocketCommandInner(cmd: SocketCommand): Promise<SocketResponse> {
   const win = mainWindow;
   if (!win || win.isDestroyed()) {
     return { ok: false, error: 'No active window' };
@@ -126,18 +167,20 @@ async function handleSocketCommand(cmd: SocketCommand): Promise<SocketResponse> 
     const requestId = crypto.randomUUID();
 
     return new Promise<SocketResponse>((resolve) => {
+      const channel = `${IPC.CAPTURE_PANE}:response`;
+      const listener = (_event: Electron.IpcMainEvent, response: { requestId: string; data: string }) => {
+        if (response.requestId === requestId) {
+          clearTimeout(timeout);
+          ipcMain.removeListener(channel, listener);
+          resolve({ ok: true, data: response.data });
+        }
+      };
       const timeout = setTimeout(() => {
-        ipcMain.removeAllListeners(`${IPC.CAPTURE_PANE}:response`);
+        ipcMain.removeListener(channel, listener);
         resolve({ ok: false, error: 'Timeout waiting for capture-pane response' });
       }, 5000);
 
-      ipcMain.once(`${IPC.CAPTURE_PANE}:response`, (_event, response: { requestId: string; data: string }) => {
-        if (response.requestId === requestId) {
-          clearTimeout(timeout);
-          resolve({ ok: true, data: response.data });
-        }
-      });
-
+      ipcMain.on(channel, listener);
       win.webContents.send(IPC.CAPTURE_PANE, { target, lines, requestId });
     });
   }
@@ -146,18 +189,20 @@ async function handleSocketCommand(cmd: SocketCommand): Promise<SocketResponse> 
     const requestId = crypto.randomUUID();
 
     return new Promise<SocketResponse>((resolve) => {
+      const channel = `${IPC.LIST_PANES}:response`;
+      const listener = (_event: Electron.IpcMainEvent, response: { requestId: string; panes: any[] }) => {
+        if (response.requestId === requestId) {
+          clearTimeout(timeout);
+          ipcMain.removeListener(channel, listener);
+          resolve({ ok: true, panes: response.panes });
+        }
+      };
       const timeout = setTimeout(() => {
-        ipcMain.removeAllListeners(`${IPC.LIST_PANES}:response`);
+        ipcMain.removeListener(channel, listener);
         resolve({ ok: false, error: 'Timeout waiting for list-panes response' });
       }, 5000);
 
-      ipcMain.once(`${IPC.LIST_PANES}:response`, (_event, response: { requestId: string; panes: any[] }) => {
-        if (response.requestId === requestId) {
-          clearTimeout(timeout);
-          resolve({ ok: true, panes: response.panes });
-        }
-      });
-
+      ipcMain.on(channel, listener);
       win.webContents.send(IPC.LIST_PANES, { requestId });
     });
   }

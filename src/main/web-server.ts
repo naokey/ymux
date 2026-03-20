@@ -65,6 +65,14 @@ export function startWebServer(
     });
   });
 
+  httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`[ymux] Dashboard port ${WEB_PORT} in use, skipping web server`);
+    } else {
+      console.error('[ymux] Web server error:', err);
+    }
+  });
+
   httpServer.listen(WEB_PORT, '0.0.0.0', () => {
     const ip = getLocalIP();
     console.log(`ymux dashboard: http://${ip}:${WEB_PORT}`);
@@ -93,7 +101,7 @@ export function broadcastPtyData(sessionId: string, data: string): void {
   const msg = JSON.stringify({ type: 'output', sessionId, data });
   for (const ws of wsClients) {
     if (ws.readyState === WebSocket.OPEN) {
-      ws.send(msg);
+      try { ws.send(msg); } catch { wsClients.delete(ws); }
     }
   }
 }
@@ -103,7 +111,9 @@ export function broadcastSessionExit(sessionId: string): void {
   waitingSessions.delete(sessionId);
   const msg = JSON.stringify({ type: 'exit', sessionId });
   for (const ws of wsClients) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+    if (ws.readyState === WebSocket.OPEN) {
+      try { ws.send(msg); } catch { wsClients.delete(ws); }
+    }
   }
 }
 
@@ -115,7 +125,9 @@ export function broadcastWaitingState(sessionId: string, waiting: boolean): void
   }
   const msg = JSON.stringify({ type: 'waiting', sessionId, waiting });
   for (const ws of wsClients) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+    if (ws.readyState === WebSocket.OPEN) {
+      try { ws.send(msg); } catch { wsClients.delete(ws); }
+    }
   }
 }
 
@@ -123,7 +135,9 @@ export function broadcastNewSession(sessionId: string): void {
   sessionOutputBuffers.set(sessionId, []);
   const msg = JSON.stringify({ type: 'new-session', sessionId });
   for (const ws of wsClients) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+    if (ws.readyState === WebSocket.OPEN) {
+      try { ws.send(msg); } catch { wsClients.delete(ws); }
+    }
   }
 }
 

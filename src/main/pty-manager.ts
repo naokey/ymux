@@ -34,27 +34,42 @@ export class PtyManager {
       args.push('-c', options.command);
     }
 
-    const proc = pty.spawn(shell, args, {
-      name: 'xterm-256color',
-      cols,
-      rows,
-      cwd,
-      env,
-    });
+    let proc: pty.IPty;
+    try {
+      proc = pty.spawn(shell, args, {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd,
+        env,
+      });
+    } catch (err) {
+      console.error(`[ymux] Failed to spawn PTY ${id}:`, err);
+      throw err;
+    }
 
     proc.onData((data: string) => {
-      if (!win.isDestroyed()) {
-        win.webContents.send(IPC.PTY_DATA, id, data);
+      try {
+        if (!win.isDestroyed()) {
+          win.webContents.send(IPC.PTY_DATA, id, data);
+        }
+        broadcastPtyData(id, data);
+      } catch (err) {
+        console.error(`[ymux] Error broadcasting PTY data for ${id}:`, err);
       }
-      broadcastPtyData(id, data);
     });
 
     proc.onExit(({ exitCode }) => {
-      if (!win.isDestroyed()) {
-        win.webContents.send(IPC.PTY_EXIT, id, exitCode);
+      try {
+        if (!win.isDestroyed()) {
+          win.webContents.send(IPC.PTY_EXIT, id, exitCode);
+        }
+        this.sessions.delete(id);
+        broadcastSessionExit(id);
+      } catch (err) {
+        console.error(`[ymux] Error handling PTY exit for ${id}:`, err);
+        this.sessions.delete(id);
       }
-      this.sessions.delete(id);
-      broadcastSessionExit(id);
     });
 
     this.sessions.set(id, { process: proc, cwd });
@@ -87,7 +102,11 @@ export class PtyManager {
   kill(id: string): void {
     const session = this.sessions.get(id);
     if (session) {
-      session.process.kill();
+      try {
+        session.process.kill();
+      } catch (err) {
+        console.error(`[ymux] Error killing PTY ${id}:`, err);
+      }
       this.sessions.delete(id);
     }
   }
