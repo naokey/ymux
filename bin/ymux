@@ -2,9 +2,26 @@
 
 const net = require('node:net');
 const path = require('node:path');
+const os = require('node:os');
 
+// Match the socket path used by the Electron main process.
+// Priority: YMUX_SOCKET env var > ~/Library/Application Support/ymux/ymux.sock > /tmp/ymux.sock
+function getDefaultSocketPath() {
+  if (process.platform === 'darwin') {
+    const appSupport = path.join(os.homedir(), 'Library', 'Application Support', 'ymux');
+    const candidate = path.join(appSupport, 'ymux.sock');
+    try {
+      require('node:fs').accessSync(candidate);
+      return candidate;
+    } catch {
+      // Fall back: also check legacy /tmp path for backward compat
+      return '/tmp/ymux.sock';
+    }
+  }
+  return '/tmp/ymux.sock';
+}
 
-const SOCKET_PATH = process.env.YMUX_SOCKET || '/tmp/ymux.sock';
+const SOCKET_PATH = process.env.YMUX_SOCKET || getDefaultSocketPath();
 
 const args = process.argv.slice(2);
 const subcommand = args[0];

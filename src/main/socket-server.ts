@@ -1,9 +1,21 @@
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { app } from 'electron';
 
-// Use a fixed, well-known path for the socket
-export const SOCKET_PATH = '/tmp/ymux.sock';
+// Use a stable path inside the app's user data directory to avoid macOS /tmp cleanup.
+// Falls back to /tmp/ymux.sock if the app data dir is unavailable.
+function getSocketPath(): string {
+  try {
+    const userDataDir = app.getPath('userData'); // ~/Library/Application Support/ymux
+    return path.join(userDataDir, 'ymux.sock');
+  } catch {
+    return '/tmp/ymux.sock';
+  }
+}
+
+export const SOCKET_PATH = getSocketPath();
 
 export interface SocketCommand {
   action: 'split' | 'new-tab' | 'send-keys' | 'capture-pane' | 'list-panes';

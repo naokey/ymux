@@ -1,6 +1,5 @@
 import https from 'node:https';
 import { PtyManager } from './pty-manager';
-import { BrowserWindow } from 'electron';
 import { sessionOutputBuffers, waitingSessions } from './web-server';
 
 let botToken: string | null = null;
@@ -8,7 +7,7 @@ let chatId: string | null = null;
 let pollingTimer: ReturnType<typeof setTimeout> | null = null;
 let lastUpdateId = 0;
 let ptyManager: PtyManager | null = null;
-let getWindow: (() => BrowserWindow | null) | null = null;
+let consecutiveErrors = 0;
 
 // Config file path
 import path from 'node:path';
@@ -94,6 +93,7 @@ async function pollUpdates(): Promise<void> {
     });
 
     if (result.ok && result.result) {
+      consecutiveErrors = 0;
       for (const update of result.result) {
         lastUpdateId = update.update_id;
         if (update.message?.text) {
@@ -102,7 +102,11 @@ async function pollUpdates(): Promise<void> {
       }
     }
   } catch (err) {
-    console.error('Telegram polling error:', err);
+    consecutiveErrors++;
+    const backoff = Math.min(30000, 1000 * Math.pow(2, consecutiveErrors - 1));
+    console.error(`Telegram polling error (retry in ${backoff}ms):`, err);
+    pollingTimer = setTimeout(pollUpdates, backoff);
+    return;
   }
 
   // Continue polling
@@ -237,9 +241,8 @@ export function notifyWaiting(sessionId: string, waiting: boolean): void {
 
 // --- Public API ---
 
-export function startTelegramBot(pm: PtyManager, gw: () => BrowserWindow | null): void {
+export function startTelegramBot(pm: PtyManager): void {
   ptyManager = pm;
-  getWindow = gw;
 
   const config = loadConfig();
   if (config?.token) {

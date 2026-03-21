@@ -1,4 +1,4 @@
-import { app, BrowserWindow, webContents, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { PtyManager } from './pty-manager';
@@ -39,7 +39,8 @@ const createWindow = () => {
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     const loadWithRetry = (retries = 10) => {
-      mainWindow!.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL).catch(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL).catch(() => {
         if (retries > 0) {
           setTimeout(() => loadWithRetry(retries - 1), 1000);
         }
@@ -80,25 +81,21 @@ const createWindow = () => {
     }
   });
 
-  // Handle webview new-window requests (target="_blank", window.open)
-  // Electron webview tags create guest webContents; we deny popup creation
-  // and let the renderer handle it via the 'new-window' event on the webview tag.
+  // Security: disable node integration in webviews
   mainWindow.webContents.on('will-attach-webview', (_event, webPreferences) => {
-    // Security: disable node integration in webviews
     webPreferences.nodeIntegration = false;
     webPreferences.contextIsolation = true;
   });
-
-  // When a webview guest tries to open a new window, deny it
-  // (the renderer's 'new-window' event handler will open it as a new browser tab)
-  app.on('web-contents-created', (_event, contents) => {
-    if (contents.getType() === 'webview') {
-      contents.setWindowOpenHandler(() => {
-        return { action: 'deny' };
-      });
-    }
-  });
 };
+
+// Register once globally (not inside createWindow to avoid duplicate listeners)
+app.on('web-contents-created', (_event, contents) => {
+  if (contents.getType() === 'webview') {
+    contents.setWindowOpenHandler(() => {
+      return { action: 'deny' };
+    });
+  }
+});
 
 registerIpcHandlers(ptyManager, () => mainWindow);
 
@@ -221,13 +218,15 @@ app.on('ready', () => {
   startSocketServer(handleSocketCommand);
   createTray(() => mainWindow);
   startWebServer(ptyManager, () => mainWindow);
-  startTelegramBot(ptyManager, () => mainWindow);
+  startTelegramBot(ptyManager);
 });
 
 app.on('window-all-closed', () => {
   ptyManager.killAll();
-  stopSocketServer();
+  // On macOS, keep the socket server alive so CLI still works when the window is closed
+  // (the app stays running in the dock). On other platforms, stop everything.
   if (process.platform !== 'darwin') {
+    stopSocketServer();
     app.quit();
   }
 });
@@ -235,6 +234,8 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
+    // Re-start socket server if it was stopped (e.g. after an error)
+    startSocketServer(handleSocketCommand);
   }
 });
 

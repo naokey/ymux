@@ -80,6 +80,10 @@ export function startWebServer(
 }
 
 export function stopWebServer(): void {
+  for (const ws of wsClients) {
+    try { ws.close(); } catch {}
+  }
+  wsClients.clear();
   if (wss) { wss.close(); wss = null; }
   if (httpServer) { httpServer.close(); httpServer = null; }
 }

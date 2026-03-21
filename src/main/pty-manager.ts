@@ -25,7 +25,7 @@ export class PtyManager {
     const env = {
       ...process.env,
       YMUX: '1',
-      YMUX_SOCKET: '/tmp/ymux.sock',
+      YMUX_SOCKET: SOCKET_PATH,
     } as Record<string, string>;
 
     // If a command was specified, wrap it in a shell invocation
